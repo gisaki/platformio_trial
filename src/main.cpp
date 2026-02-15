@@ -312,24 +312,45 @@ void processFile() {
         return;
     }
 
+    size_t totalSize = f.size();
+    int lastPercent = -1; // 前回の進捗を保持（描画のチラつき防止）
+
+    #ifdef USE_LCD
+        M5.Lcd.fillScreen(BLACK);
+        M5.Lcd.setCursor(0, 0);
+        M5.Lcd.println("CAN Transmitting...");
+        M5.Lcd.printf("File: %s\nSize: %u", filename, totalSize);
+    #endif
+
     Serial.println("--- CAN Transmission Start ---");
     Serial.printf("Settings: ID1=0x%X, ID2=0x%X, Gap=%d, Interval=%d\n", 
                   CAN_SEND_ID1, CAN_SEND_ID2, CAN_PACKET_GAP, CAN_CHUNK_INTERVAL);
     uint8_t buffer[CHUNK_SIZE];
     while (f.available()) {
         int bytesRead = f.read(buffer, CHUNK_SIZE);
+        size_t currentPos = f.position();
+
         // --- デバッグ用シリアル出力 ---
-        Serial.printf("[%04X]: ", f.position() - bytesRead);
+        Serial.printf("[%04X]: ", currentPos - bytesRead);
         for (int i = 0; i < bytesRead; i++) Serial.printf("%02X ", buffer[i]);
         Serial.println();
 
-        // 画面あるいはLEDで送信表示
+        // --- 進捗計算と画面表示 ---
+        int progress = (currentPos * 100) / totalSize;
+
         #ifdef USE_LCD
-            // 進捗表示（LCD機種のみ）
-            M5.Lcd.fillRect(0, 40, 160, 40, BLACK); // 表示エリアをクリア
-            M5.Lcd.setCursor(0, 40);
-            // 全体 byte 数と現在の byte 位置を表示
-            M5.Lcd.printf("Processing: %u / %u bytes", f.position(), f.size());
+            if (progress != lastPercent) {
+                lastPercent = progress;
+                // テキスト表示エリアのクリアと更新
+                M5.Lcd.fillRect(0, 40, 160, 40, BLACK); 
+                M5.Lcd.setCursor(0, 40);
+                M5.Lcd.printf("Progress: %d%%", progress);
+                M5.Lcd.setCursor(0, 50);
+                M5.Lcd.printf("%u / %u bytes", currentPos, totalSize);
+                
+                // プログレスバー描画 (y=65, 高さ10px, 色は送信中と判別しやすいよう CYAN)
+                M5.Lcd.fillRect(0, 65, (progress * 160 / 100), 10, CYAN); 
+            }
         #else
             // LED点灯（Atom LiteはLEDを一瞬青に）
             // 間隔を設けられないので、時々消灯を入れることにより点滅を演出
@@ -340,6 +361,7 @@ void processFile() {
             }
         #endif
 
+        // --- CAN送信処理 ---
         // CANは最大8byteなので16byteを2回に分けて送信
         if (bytesRead > 0) {
             // 1パケット目 (最大8byte) 送信
@@ -354,7 +376,15 @@ void processFile() {
         delay(CAN_CHUNK_INTERVAL); // 次の16byteセットまでの間隔
     }
     f.close();
-    #ifndef USE_LCD
+
+    #ifdef USE_LCD
+        M5.Lcd.fillRect(0, 40, 160, 40, BLACK);
+        M5.Lcd.setCursor(0, 40);
+        M5.Lcd.setTextColor(GREEN);
+        M5.Lcd.println("Send Complete!");
+        M5.Lcd.setTextColor(WHITE);
+        delay(1500); // 完了メッセージ確認用
+    #else
         M5.dis.drawpix(0, 0x000000); // 終了後に完全に消灯
     #endif
     Serial.println("--- CAN Transmission End ---");
