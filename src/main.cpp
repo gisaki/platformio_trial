@@ -168,6 +168,24 @@ void processFile() {
         Serial.printf("[%04X]: ", f.position() - bytesRead);
         for (int i = 0; i < bytesRead; i++) Serial.printf("%02X ", buffer[i]);
         Serial.println();
+
+        // 画面あるいはLEDで送信表示
+        #ifdef USE_LCD
+            // 進捗表示（LCD機種のみ）
+            M5.Lcd.fillRect(0, 40, 160, 40, BLACK); // 表示エリアをクリア
+            M5.Lcd.setCursor(0, 40);
+            // 全体 byte 数と現在の byte 位置を表示
+            M5.Lcd.printf("Processing: %u / %u bytes", f.position(), f.size());
+        #else
+            // LED点灯（Atom LiteはLEDを一瞬青に）
+            // 間隔を設けられないので、時々消灯を入れることにより点滅を演出
+            if (f.position() % (CHUNK_SIZE * 10) == 0) { // 10回ごとに消灯
+                M5.dis.drawpix(0, 0x000000); // 消灯
+            } else {
+                M5.dis.drawpix(0, 0x0000ff); // 青点灯
+            }
+        #endif
+
         // CANは最大8byteなので16byteを2回に分けて送信
         if (bytesRead > 0) {
             // 1パケット目 (最大8byte) 送信
@@ -238,7 +256,14 @@ void loop() {
         twai_message_t rx_msg;
         if (twai_receive(&rx_msg, 0) == ESP_OK) {
             // シリアル出力（詳細はシリアルで確認）
-            Serial.printf("RX ID: 0x%03X\n", rx_msg.identifier);
+            // CAN ID と受信したデータを16進数で表示
+            Serial.printf("RX ID: 0x%03X", rx_msg.identifier);
+            Serial.print(", Data: ");
+            for (int i = 0; i < rx_msg.data_length_code; i++) {
+                Serial.printf("%02X ", rx_msg.data[i]);
+            }
+            Serial.println();
+            // 受信したIDがモニター対象のIDリストにあるかチェックしてフラグを立てる
             for (int i = 0; i < MONITOR_ID_COUNT; i++) {
                 if (rx_msg.identifier == MONITOR_IDS[i]) idReceivedFlags[i] = true;
             }
