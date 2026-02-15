@@ -5,6 +5,7 @@
 #endif
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ArduinoJson.h>
 #include <LittleFS.h>
 #include "driver/twai.h" // ESP32のCAN(TWAI)ドライバ
 
@@ -17,11 +18,13 @@ const char *password = "12345678";
 const char *filename = "/uploaded.bin";
 const size_t CHUNK_SIZE = 16; 
 
+const char* config_path = "/config.json";
+
 // CAN送信タイミング設定
-const uint32_t CAN_PACKET_GAP = 100;    // 8byteパケット間の待ち時間 (ms)
-const uint32_t CAN_CHUNK_INTERVAL = 100; // 16byteごとの送信間隔 (ms)
-const uint32_t CAN_SEND_ID1 = 0x123;  // 1〜8byte目のID
-const uint32_t CAN_SEND_ID2 = 0x124;  // 9〜16byte目のID
+uint32_t CAN_PACKET_GAP = 100;
+uint32_t CAN_CHUNK_INTERVAL = 100;
+uint32_t CAN_SEND_ID1 = 0x123;
+uint32_t CAN_SEND_ID2 = 0x124;
 
 // CANピン設定
 // platformio.iniから渡されたピン番号を使用
@@ -74,8 +77,9 @@ void sendCAN(uint32_t id, uint8_t* data, uint8_t len) {
 
 // Web画面の表示
 void handleRoot() {
-    String fileStatus = "ファイルはありません";
     
+    // uploadされたファイルの情報を表示
+    String fileStatus = "ファイルはありません";
     if (LittleFS.exists(filename)) {
         File f = LittleFS.open(filename, "r");
         if (f) {
@@ -86,6 +90,41 @@ void handleRoot() {
         }
     }
 
+    // 設定変更フォームの生成
+    String configHtml = "";
+     if (LittleFS.exists(config_path)) {
+        File f = LittleFS.open(config_path, "r");
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, f);
+        f.close();
+        if (error) {
+            // パース失敗時はエラーメッセージを表示
+            configHtml = "<p style='color:red;'>設定の読み込みに失敗しました。初期状態にリセットしてください。</p>";
+        } else {
+            configHtml += "<h3>設定変更</h3><form method='POST' action='/save_config'>";
+            
+            // JSONの全要素をループで取り出し
+            JsonObject obj = doc.as<JsonObject>();
+            for (JsonPair p : obj) {
+                String key = p.key().c_str();
+                String value = p.value().as<String>();
+                String note = key.indexOf("hex") != -1 ? " (16進数)" : ""; // キー名にhexが含まれば注釈
+                
+                configHtml += "<div>" + key + note + ": <br>";
+                configHtml += "<input type='text' name='" + key + "' value='" + value + "'></div>";
+            }
+            configHtml += "<input type='submit' value='設定を更新' style='background:#007bff; color:white; padding:10px 20px; border:none; border-radius:5px;'>";
+            configHtml += "</form>";
+        }
+
+        // 設定更新フォームの後にリセットボタンを配置
+        configHtml += "<hr>";
+        configHtml += "<h3>メンテナンス</h3>";
+        configHtml += "<button style='background:#ff4444; color:white; padding:10px; border:none; border-radius:5px;' "
+                      "onclick=\"if(confirm('設定を初期状態に戻しますか？')){location.href='/reset_config';}\">"
+                      "設定を初期化する</button>";
+    }
+   
     String html = "<html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body>"
                   "<h2>" + String(ssid) + " File Server / CAN Transmission</h2>"
                   "<div style='background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:10px;'>" + fileStatus + "</div>"
@@ -94,8 +133,9 @@ void handleRoot() {
                   "<input type='submit' value='アップロード' style='width:100px; height:30px;'>"
                   "</form>"
                   "<hr>"
-                  "<button style='background:#e1ff00; width:200px; height:50px;' onclick=\"fetch('/process').then(()=>alert('処理を開始しました（シリアルを確認してください）'))\">ファイルを16byteずつ処理</button>"
-                  "</body></html>";
+                  "<button style='background:#e1ff00; width:200px; height:50px;' onclick=\"fetch('/process').then(()=>alert('処理を開始しました（シリアルを確認してください）'))\">ファイルを16byteずつ処理</button>";
+    html += "<hr>" + configHtml;
+    html += "</body></html>";
     
     server.send(200, "text/html", html);
 }
@@ -156,11 +196,125 @@ void handleFileUpload() {
     }
 }
 
+// 設定をデフォルトに戻す関数
+void resetConfig() {
+    File f = LittleFS.open(config_path, "w");
+    if (f) {
+        // ここにデフォルトのJSON構造を定義
+        f.println("{\"packet_gap\": 100, \"chunk_interval\": 100, \"id1_hex\": \"123\", \"id2_hex\": \"124\"}");
+        f.close();
+        Serial.println("Config has been reset to default.");
+    }
+}
+
+// 設定保存処理
+void handleSaveConfig() {
+    if (LittleFS.exists(config_path)) {
+        // 現在のJSONを読み込み
+        File f_read = LittleFS.open(config_path, "r");
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, f_read);
+        f_read.close();
+
+        if (!error) {
+            // server.args() で POST された全パラメータをループ処理
+            for (int i = 0; i < server.args(); i++) {
+                String key = server.argName(i);
+                String val = server.arg(i);
+
+                // ArduinoJson V7: キーが存在するか(nullでないか)を確認
+                if (!doc[key].isNull()) {
+                    // 元の型に合わせて保存（数値型への自動変換）
+                    if (doc[key].is<int>()) {
+                        doc[key] = val.toInt();
+                    } else if (doc[key].is<float>()) {
+                        doc[key] = val.toFloat();
+                    } else {
+                        doc[key] = val; // 文字列として保存
+                    }
+                }
+            }
+
+            // ファイルに保存
+            File f_write = LittleFS.open(config_path, "w");
+            serializeJson(doc, f_write);
+            f_write.close();
+            
+            Serial.println("Config Updated via Web");
+        }
+    }
+
+    // ルートに戻す
+    server.sendHeader("Location", "/");
+    server.send(303);
+}
+
+// JSONからグローバル変数に設定を反映する関数
+void updateParamsFromJson() {
+    if (!LittleFS.exists(config_path)) {
+        resetConfig();
+        return;
+    }
+
+    File f = LittleFS.open(config_path, "r");
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, f);
+    f.close();
+
+    if (error) {
+        Serial.println("Failed to read config, resetting...");
+        resetConfig(); // パース失敗時は初期化
+        return;
+    }
+
+    // JSONの値をグローバル変数に反映 (V7推奨の is<T>() による存在確認)
+    if (doc["packet_gap"].is<uint32_t>()) {
+        CAN_PACKET_GAP = doc["packet_gap"];
+    }
+    
+    if (doc["chunk_interval"].is<uint32_t>()) {
+        CAN_CHUNK_INTERVAL = doc["chunk_interval"];
+    }
+    
+    // IDはWebから16進数文字列で入力されることを想定
+    if (doc["id1_hex"].is<const char*>()) {
+        CAN_SEND_ID1 = strtoul(doc["id1_hex"], NULL, 16);
+    }
+    
+    if (doc["id2_hex"].is<const char*>()) {
+        CAN_SEND_ID2 = strtoul(doc["id2_hex"], NULL, 16);
+    }
+
+    Serial.printf("Params updated: GAP=%u, Interval=%u, ID1=0x%X, ID2=0x%X\n", 
+                  CAN_PACKET_GAP, CAN_CHUNK_INTERVAL, CAN_SEND_ID1, CAN_SEND_ID2);
+}
+
+// Webエンドポイント用ハンドラ
+void handleResetConfig() {
+    resetConfig();
+    server.sendHeader("Location", "/");
+    server.send(303);
+}
+
 // 分割処理用
 void processFile() {
+    // 送信前に最新の設定を読み込む
+    updateParamsFromJson();
+
     File f = LittleFS.open(filename, "r");
-    if (!f) return;
+    if (!f) {
+        #ifndef USE_LCD
+            // ファイルがない場合は警告として一瞬黄色に
+            M5.dis.drawpix(0, 0xffff00);
+            delay(500);
+            M5.dis.drawpix(0, 0x000000);
+        #endif
+        return;
+    }
+
     Serial.println("--- CAN Transmission Start ---");
+    Serial.printf("Settings: ID1=0x%X, ID2=0x%X, Gap=%d, Interval=%d\n", 
+                  CAN_SEND_ID1, CAN_SEND_ID2, CAN_PACKET_GAP, CAN_CHUNK_INTERVAL);
     uint8_t buffer[CHUNK_SIZE];
     while (f.available()) {
         int bytesRead = f.read(buffer, CHUNK_SIZE);
@@ -200,6 +354,9 @@ void processFile() {
         delay(CAN_CHUNK_INTERVAL); // 次の16byteセットまでの間隔
     }
     f.close();
+    #ifndef USE_LCD
+        M5.dis.drawpix(0, 0x000000); // 終了後に完全に消灯
+    #endif
     Serial.println("--- CAN Transmission End ---");
 }
 
@@ -211,11 +368,14 @@ void setup() {
     #else
         M5.begin(true, false, true); // Serial, I2C, LED
     #endif
-    LittleFS.begin(true);
-    setupCAN();
 
+    LittleFS.begin(true);
+    // 起動時に設定を読み込む
+    updateParamsFromJson();
+
+    setupCAN();
     WiFi.softAP(ssid, password);
-    
+
     // Content-Lengthヘッダーを取得可能にする
     const char * headerkeys[] = {"Content-Length"} ;
     server.collectHeaders(headerkeys, 1);
@@ -226,6 +386,8 @@ void setup() {
         processFile();
         server.send(200, "text/plain", "OK");
     });
+    server.on("/save_config", HTTP_POST, handleSaveConfig);
+    server.on("/reset_config", HTTP_GET, handleResetConfig);
 
     server.begin();
     #ifdef USE_LCD
