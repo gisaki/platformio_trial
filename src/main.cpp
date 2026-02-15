@@ -18,8 +18,8 @@ const char *filename = "/uploaded.bin";
 const size_t CHUNK_SIZE = 16; 
 
 // CAN送信タイミング設定
-const uint32_t CAN_PACKET_GAP = 5;    // 8byteパケット間の待ち時間 (ms)
-const uint32_t CAN_CHUNK_INTERVAL = 10; // 16byteごとの送信間隔 (ms)
+const uint32_t CAN_PACKET_GAP = 100;    // 8byteパケット間の待ち時間 (ms)
+const uint32_t CAN_CHUNK_INTERVAL = 100; // 16byteごとの送信間隔 (ms)
 const uint32_t CAN_SEND_ID1 = 0x123;  // 1〜8byte目のID
 const uint32_t CAN_SEND_ID2 = 0x124;  // 9〜16byte目のID
 
