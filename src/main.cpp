@@ -411,7 +411,27 @@ uint32_t lastScanTime = 0;
 int heartBeatStep = 0;
 
 void loop() {
+    M5.update(); // ボタン状態更新
     server.handleClient();
+
+    // ホームボタン(BtnA)が押されたら開始
+    // M5StickCはBtnA、Atom LiteはボタンがBtnに割り当てられているので異なるコードにする
+    uint8_t isBtnAPressed;
+    #ifdef USE_LCD
+        isBtnAPressed = M5.BtnA.wasPressed();
+    #else
+        isBtnAPressed = M5.Btn.wasPressed();
+    #endif
+    if (isBtnAPressed) {
+        #ifndef USE_LCD
+            // Atom Lite用：ボタンを押した瞬間に赤く点灯
+            M5.dis.drawpix(0, 0xff0000); 
+            delay(100); // 視認用の一瞬のウェイト
+        #endif
+
+        Serial.println("Button A Pressed: Starting processFile...");
+        processFile();
+    }
 
     if (!isUploading) {
         // 1. CAN受信チェック
