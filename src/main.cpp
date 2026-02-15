@@ -87,7 +87,7 @@ void handleRoot() {
     }
 
     String html = "<html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body>"
-                  "<h2>M5StickC File Server / CAN Transmission</h2>"
+                  "<h2>" + String(ssid) + " File Server / CAN Transmission</h2>"
                   "<div style='background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:10px;'>" + fileStatus + "</div>"
                   "<form method='POST' action='/upload' enctype='multipart/form-data'>"
                   "<input type='file' name='upload'><br><br>"
